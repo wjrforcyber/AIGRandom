@@ -1,5 +1,7 @@
 # aigrandom
 
+![CI](https://github.com/wjrforcyber/AIGRandom/actions/workflows/ci.yml/badge.svg)
+
 Random And-Inverter Graph (AIG) generator in the [AIGER format](http://fmv.jku.at/aiger).
 Built on top of the [AIGER library](https://github.com/arminbiere/aiger) by Prof. Armin Biere. This is a C version, for Python integration, [aigverse](https://github.com/marcelwa/aigverse) also provides the functionality which is based on [mockturtle](https://github.com/lsils/mockturtle).
 
