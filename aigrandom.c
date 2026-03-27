@@ -1,0 +1,413 @@
+/***************************************************************************
+Copyright (c) 2026, Jingren Wang, HKUST(GZ).
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to
+deal in the Software without restriction, including without limitation the
+rights to use, copy, modify, merge, publish, distribute, sublicense, and/or
+sell copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
+IN THE SOFTWARE.
+***************************************************************************/
+
+#include "aigrandom.h"
+
+#include <assert.h>
+#include <stdarg.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <time.h>
+#include <unistd.h>
+#include <sys/times.h>
+
+/*------------------------------------------------------------------------*/
+
+static unsigned rng_state;
+
+static void rng_init(unsigned seed)
+{
+    rng_state = seed ? seed : 1;
+}
+
+static unsigned rng_next(void)
+{
+    rng_state *= 1664525u;
+    rng_state += 1013904223u;
+    return rng_state;
+}
+
+static unsigned rng_pick(unsigned from, unsigned to)
+{
+    unsigned range = to - from + 1;
+    return from + (rng_next() % range);
+}
+
+static int rng_flip(void)
+{
+    return rng_next() & 1;
+}
+
+/*------------------------------------------------------------------------*/
+
+typedef struct LitPool LitPool;
+
+struct LitPool {
+    unsigned* lits;
+    unsigned count;
+    unsigned size;
+};
+
+static void pool_init(LitPool* p)
+{
+    p->lits = 0;
+    p->count = 0;
+    p->size = 0;
+}
+
+static void pool_push(LitPool* p, unsigned lit)
+{
+    if (p->count == p->size) {
+        p->size = p->size ? 2 * p->size : 64;
+        p->lits = realloc(p->lits, p->size * sizeof(unsigned));
+    }
+    p->lits[p->count++] = lit;
+}
+
+static unsigned pool_random(const LitPool* p)
+{
+    assert(p->count > 0);
+    return p->lits[rng_pick(0, p->count - 1)];
+}
+
+static void pool_release(LitPool* p)
+{
+    free(p->lits);
+    pool_init(p);
+}
+
+/*------------------------------------------------------------------------*/
+
+aiger* aigrandom_generate(aigrandom_config* cfg)
+{
+    unsigned num_inputs, num_latches, num_ands, num_outputs;
+    unsigned i, lit, lhs, rhs0, rhs1, next_lit;
+    unsigned var_idx;
+    aiger* model;
+    LitPool defined;
+    char buf[120];
+
+    rng_init(cfg->seed);
+
+    num_inputs = rng_pick(cfg->min_inputs, cfg->max_inputs);
+
+    if (cfg->sequential)
+        num_latches = rng_pick(cfg->min_latches, cfg->max_latches);
+    else
+        num_latches = 0;
+
+    num_ands = rng_pick(cfg->min_ands, cfg->max_ands);
+    num_outputs = rng_pick(cfg->min_outputs, cfg->max_outputs);
+
+    model = aiger_init();
+    pool_init(&defined);
+
+    for (i = 0; i < num_inputs; i++) {
+        lit = 2 * (i + 1);
+        if (cfg->add_symbols) {
+            sprintf(buf, "input_%u", i);
+            aiger_add_input(model, lit, buf);
+        } else
+            aiger_add_input(model, lit, 0);
+        pool_push(&defined, lit);
+    }
+
+    for (i = 0; i < num_latches; i++) {
+        lit = 2 * (num_inputs + i + 1);
+        pool_push(&defined, lit);
+    }
+
+    var_idx = num_inputs + num_latches;
+
+    for (i = 0; i < num_ands; i++) {
+        lhs = 2 * (++var_idx);
+
+        assert(defined.count > 0);
+        rhs0 = pool_random(&defined);
+        if (rng_flip())
+            rhs0 ^= 1;
+
+        assert(defined.count > 0);
+        rhs1 = pool_random(&defined);
+        if (rng_flip())
+            rhs1 ^= 1;
+
+        aiger_add_and(model, lhs, rhs0, rhs1);
+        pool_push(&defined, lhs);
+    }
+
+    for (i = 0; i < num_latches; i++) {
+        lit = 2 * (num_inputs + i + 1);
+
+        assert(defined.count > 0);
+        next_lit = pool_random(&defined);
+        if (rng_flip())
+            next_lit ^= 1;
+
+        if (cfg->add_symbols) {
+            sprintf(buf, "latch_%u", i);
+            aiger_add_latch(model, lit, next_lit, buf);
+        } else
+            aiger_add_latch(model, lit, next_lit, 0);
+    }
+
+    for (i = 0; i < num_outputs; i++) {
+        assert(defined.count > 0);
+        lit = pool_random(&defined);
+        if (rng_flip())
+            lit ^= 1;
+
+        if (cfg->add_symbols) {
+            sprintf(buf, "output_%u", i);
+            aiger_add_output(model, lit, buf);
+        } else
+            aiger_add_output(model, lit, 0);
+    }
+
+    if (cfg->add_comments) {
+        sprintf(buf, "generated by aigrandom seed %u", cfg->seed);
+        aiger_add_comment(model, buf);
+        sprintf(buf, "MILOA %u %u %u %u %u",
+                num_inputs + num_latches + num_ands, num_inputs, num_latches,
+                num_outputs, num_ands);
+        aiger_add_comment(model, buf);
+    }
+
+    aiger_reencode(model);
+    pool_release(&defined);
+
+    return model;
+}
+
+/*------------------------------------------------------------------------*/
+/* Command line driver                                                     */
+/*------------------------------------------------------------------------*/
+
+static void die(const char* fmt, ...)
+{
+    va_list ap;
+    fputs("*** [aigrandom] ", stderr);
+    va_start(ap, fmt);
+    vfprintf(stderr, fmt, ap);
+    va_end(ap);
+    fputc('\n', stderr);
+    fflush(stderr);
+    exit(1);
+}
+
+static void msg(const char* fmt, ...)
+{
+    va_list ap;
+    fputs("[aigrandom] ", stderr);
+    va_start(ap, fmt);
+    vfprintf(stderr, fmt, ap);
+    va_end(ap);
+    fputc('\n', stderr);
+    fflush(stderr);
+}
+
+#define USAGE                                                             \
+    "usage: aigrandom [-h][-v][-a][-c][-s][-n <count>][<output>]\n"       \
+    "\n"                                                                  \
+    "Generate random AIGs in AIGER format.\n"                             \
+    "\n"                                                                  \
+    "  -h           print this command line option summary\n"             \
+    "  -v           verbose output on stderr\n"                           \
+    "  -a           ASCII output (.aag format)\n"                         \
+    "  -c           combinational only (no latches)\n"                    \
+    "  -s           add symbols to inputs, latches and outputs\n"         \
+    "  -n <count>   generate <count> AIGs (default 1)\n"                  \
+    "  <output>     output file path (use '%%d' for count placeholder)\n" \
+    "\n"                                                                  \
+    "  Size bounds:\n"                                                    \
+    "  --min-inputs <n>   minimum inputs (default 1)\n"                   \
+    "  --max-inputs <n>   maximum inputs (default 20)\n"                  \
+    "  --min-latches <n>  minimum latches (default 0)\n"                  \
+    "  --max-latches <n>  maximum latches (default 10)\n"                 \
+    "  --min-ands <n>     minimum AND gates (default 0)\n"                \
+    "  --max-ands <n>     maximum AND gates (default 100)\n"              \
+    "  --min-outputs <n>  minimum outputs (default 1)\n"                  \
+    "  --max-outputs <n>  maximum outputs (default 10)\n"                 \
+    "  --seed <n>         random seed (default: time-based)\n"
+
+static int isposnum(const char* str)
+{
+    const char* p;
+    if (str[0] == '0' && !str[1])
+        return 1;
+    if (str[0] == '0')
+        return 0;
+    for (p = str; *p; p++)
+        if (*p < '0' || *p > '9')
+            return 0;
+    return 1;
+}
+
+int main(int argc, char** argv)
+{
+    aigrandom_config cfg;
+    const char* output_pattern = 0;
+    int verbose = 0, ascii = 0, count = 1;
+    int i;
+    unsigned base_seed = 0;
+
+    memset(&cfg, 0, sizeof cfg);
+    cfg.min_inputs = 1;
+    cfg.max_inputs = 20;
+    cfg.min_latches = 0;
+    cfg.max_latches = 10;
+    cfg.min_ands = 0;
+    cfg.max_ands = 100;
+    cfg.min_outputs = 1;
+    cfg.max_outputs = 10;
+    cfg.sequential = 1;
+
+    for (i = 1; i < argc; i++) {
+        const char* arg = argv[i];
+        if (!strcmp(arg, "-h")) {
+            printf("%s", USAGE);
+            exit(0);
+        } else if (!strcmp(arg, "-v"))
+            verbose = 1;
+        else if (!strcmp(arg, "-a"))
+            ascii = 1;
+        else if (!strcmp(arg, "-c"))
+            cfg.sequential = 0;
+        else if (!strcmp(arg, "-s"))
+            cfg.add_symbols = 1;
+        else if (!strcmp(arg, "-n")) {
+            if (++i == argc)
+                die("argument to '-n' missing");
+            if (!isposnum(argv[i]))
+                die("invalid count '%s'", argv[i]);
+            count = atoi(argv[i]);
+        } else if (!strcmp(arg, "--min-inputs")) {
+            if (++i == argc)
+                die("argument to '--min-inputs' missing");
+            cfg.min_inputs = atoi(argv[i]);
+        } else if (!strcmp(arg, "--max-inputs")) {
+            if (++i == argc)
+                die("argument to '--max-inputs' missing");
+            cfg.max_inputs = atoi(argv[i]);
+        } else if (!strcmp(arg, "--min-latches")) {
+            if (++i == argc)
+                die("argument to '--min-latches' missing");
+            cfg.min_latches = atoi(argv[i]);
+        } else if (!strcmp(arg, "--max-latches")) {
+            if (++i == argc)
+                die("argument to '--max-latches' missing");
+            cfg.max_latches = atoi(argv[i]);
+        } else if (!strcmp(arg, "--min-ands")) {
+            if (++i == argc)
+                die("argument to '--min-ands' missing");
+            cfg.min_ands = atoi(argv[i]);
+        } else if (!strcmp(arg, "--max-ands")) {
+            if (++i == argc)
+                die("argument to '--max-ands' missing");
+            cfg.max_ands = atoi(argv[i]);
+        } else if (!strcmp(arg, "--min-outputs")) {
+            if (++i == argc)
+                die("argument to '--min-outputs' missing");
+            cfg.min_outputs = atoi(argv[i]);
+        } else if (!strcmp(arg, "--max-outputs")) {
+            if (++i == argc)
+                die("argument to '--max-outputs' missing");
+            cfg.max_outputs = atoi(argv[i]);
+        } else if (!strcmp(arg, "--seed")) {
+            if (++i == argc)
+                die("argument to '--seed' missing");
+            base_seed = atoi(argv[i]);
+        } else if (arg[0] == '-' && arg[1] == '-')
+            die("invalid option '%s'", arg);
+        else if (arg[0] == '-')
+            die("invalid command line option '%s'", arg);
+        else
+            output_pattern = arg;
+    }
+
+    if (base_seed == 0) {
+        struct tms tp;
+        unsigned tmp = (unsigned) times(&tp) * (unsigned) getpid();
+        base_seed = tmp ? tmp : 42;
+    }
+
+    if (cfg.min_inputs > cfg.max_inputs)
+        die("--min-inputs (%u) > --max-inputs (%u)", cfg.min_inputs,
+            cfg.max_inputs);
+    if (cfg.min_latches > cfg.max_latches)
+        die("--min-latches (%u) > --max-latches (%u)", cfg.min_latches,
+            cfg.max_latches);
+    if (cfg.min_ands > cfg.max_ands)
+        die("--min-ands (%u) > --max-ands (%u)", cfg.min_ands, cfg.max_ands);
+    if (cfg.min_outputs > cfg.max_outputs)
+        die("--min-outputs (%u) > --max-outputs (%u)", cfg.min_outputs,
+            cfg.max_outputs);
+
+    for (i = 0; i < count; i++) {
+        aiger* model;
+        const char* err;
+        int ok;
+        aiger_mode mode;
+        char output_file[1024];
+
+        cfg.seed = base_seed + i;
+        cfg.add_comments = verbose;
+
+        model = aigrandom_generate(&cfg);
+
+        err = aiger_check(model);
+        if (err)
+            die("generated invalid AIG: %s", err);
+
+        if (verbose)
+            msg("seed %u: MILOA %u %u %u %u %u", cfg.seed, model->maxvar,
+                model->num_inputs, model->num_latches, model->num_outputs,
+                model->num_ands);
+
+        if (output_pattern) {
+            if (count > 1 && strstr(output_pattern, "%d"))
+                snprintf(output_file, sizeof output_file, output_pattern, i);
+            else if (count > 1)
+                snprintf(output_file, sizeof output_file, "%s.%d",
+                         output_pattern, i);
+            else
+                snprintf(output_file, sizeof output_file, "%s", output_pattern);
+
+            ok = aiger_open_and_write_to_file(model, output_file);
+            if (!ok)
+                die("failed to write '%s'", output_file);
+
+            if (verbose)
+                msg("wrote '%s'", output_file);
+        } else {
+            mode = (ascii || isatty(1)) ? aiger_ascii_mode : aiger_binary_mode;
+            ok = aiger_write_to_file(model, mode, stdout);
+            if (!ok)
+                die("write error");
+        }
+
+        aiger_reset(model);
+    }
+
+    return 0;
+}
