@@ -8,8 +8,9 @@ Built on top of the [AIGER library](https://github.com/arminbiere/aiger) by Prof
 ## Build
 
 ```sh
-make          # produces the 'aigrandom' binary
-make clean    # remove build artifacts
+make                # produces the 'aigrandom' binary
+make libaigrandom.a # produces a static library
+make clean          # remove all build artifacts
 ```
 
 Requires a C compiler (`gcc` or `clang`). The build uses `CC ?= gcc` and

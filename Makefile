@@ -12,7 +12,10 @@ aigrandom.o: aigrandom.c aigrandom.h aiger.h
 aigrandom: aigrandom.o aiger.o aigrandom.c aigrandom.h aiger.h
 	$(CC) $(CFLAGS) -o $@ aigrandom.o aiger.o
 
-clean:
-	rm -f aigrandom aigrandom.o aiger.o
+libaigrandom.a: aigrandom.o aiger.o
+	ar rcs $@ $^
 
-.PHONY: all clean
+clean:
+	rm -f aigrandom aigrandom.o aiger.o libaigrandom.a
+
+.PHONY: all clean libaigrandom.a
