@@ -23,7 +23,7 @@ make CC=clang CFLAGS="-O2 -g"
 ## CLI Usage
 
 ```
-aigrandom [-h][-v][-a][-c][-s][-n <count>][<output>]
+aigrandom [-h][-v][-a][-c][-s][-d][-n <count>][<output>]
 ```
 
 Generate random AIGs and write them in AIGER format.
@@ -37,6 +37,7 @@ Generate random AIGs and write them in AIGER format.
 | `-a` | Force ASCII (`.aag`) output format |
 | `-c` | Combinational only — no latches |
 | `-s` | Attach symbolic names to inputs, latches, and outputs |
+| `-d` | Also write a DOT graph visualization file (`.dot`) alongside the AIG output |
 | `-n <count>` | Generate `<count>` AIG files (default 1) |
 
 ### Size bounds
@@ -63,6 +64,28 @@ determined by the file extension: `.aag` for ASCII, `.aig` for binary.
 When `-n` is greater than 1, use `%d` in the filename as an index
 placeholder. If no output file is given, the result is written to stdout
 (ASCII mode if a terminal, binary otherwise).
+
+When `-d` is used, a `.dot` file is written alongside each AIG file (the
+`.aig`/`.aag` extension is replaced with `.dot`). The DOT file can be
+rendered with Graphviz: `dot -Tpng graph.dot -o graph.png`.
+
+### DOT visualization legend
+
+| Component | Shape | Color | Description |
+|-----------|-------|-------|-------------|
+| Input | Box | Pale green (filled) | Primary input, placed at the bottom (`rank = source`) |
+| AND gate | Box | Default (white) | AND gate, shown as the default `box` node in the middle layers |
+| Latch | Box | Magenta border | Latch (sequential element), placement determined by the layout engine based on connectivity |
+| Output | Double octagon | Light pink (filled) | Primary output, placed at the top (`rank = sink`) |
+
+Edges:
+- **Solid arrow** — non-inverted connection (positive literal)
+- **Dashed arrow** — inverted connection (negated literal, the sign bit is set)
+
+Nodes are labeled with their symbolic names when `-s` is used (e.g. `input_0`,
+`output_3`), otherwise with variable indices (e.g. `1`, `15`). Inputs are
+guaranteed to be referenced by at least one AND gate, latch, or output —
+unused inputs are automatically removed before the DOT file is written.
 
 ## Examples
 
@@ -109,6 +132,22 @@ This produces `batch_0.aig` through `batch_99.aig`.
 ./aigrandom -c --seed 42 b.aig
 diff a.aig b.aig   # files are identical
 ```
+
+### Generate AIG with DOT visualization
+
+```sh
+./aigrandom -c\                   
+  --min-inputs 3 --max-inputs 5 \
+  --min-ands 0 --max-ands 10 \               
+  --min-outputs 1 --max-outputs 2 \
+  --seed 42 -d tiny_0.aig
+dot -Tpng tiny_0.dot -o tiny_0.png
+```
+
+The random generated combinational logic shows as 
+<p align="center">
+    <img src="./resources/images/tiny_0.png" width="180"/>
+</p>
 
 ## Output format
 

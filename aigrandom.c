@@ -98,6 +98,53 @@ static void pool_release(LitPool* p)
 
 /*------------------------------------------------------------------------*/
 
+static void
+remove_unused_inputs(aiger* model)
+{
+    unsigned char* used;
+    unsigned i, new_num_inputs;
+
+    used = calloc(model->maxvar + 1, 1);
+    if (!used) return;
+
+    for (i = 0; i < model->num_ands; i++) {
+        used[aiger_lit2var(model->ands[i].rhs0)] = 1;
+        used[aiger_lit2var(model->ands[i].rhs1)] = 1;
+    }
+    for (i = 0; i < model->num_latches; i++) {
+        used[aiger_lit2var(model->latches[i].next)] = 1;
+    }
+    for (i = 0; i < model->num_outputs; i++) {
+        used[aiger_lit2var(model->outputs[i].lit)] = 1;
+    }
+    for (i = 0; i < model->num_bad; i++) {
+        used[aiger_lit2var(model->bad[i].lit)] = 1;
+    }
+    for (i = 0; i < model->num_constraints; i++) {
+        used[aiger_lit2var(model->constraints[i].lit)] = 1;
+    }
+    for (i = 0; i < model->num_justice; i++) {
+        unsigned k;
+        for (k = 0; k < model->justice[i].size; k++)
+            used[aiger_lit2var(model->justice[i].lits[k])] = 1;
+    }
+    for (i = 0; i < model->num_fairness; i++) {
+        used[aiger_lit2var(model->fairness[i].lit)] = 1;
+    }
+
+    new_num_inputs = 0;
+    for (i = 0; i < model->num_inputs; i++) {
+        if (used[aiger_lit2var(model->inputs[i].lit)])
+            model->inputs[new_num_inputs++] = model->inputs[i];
+    }
+    model->num_inputs = new_num_inputs;
+
+    free(used);
+
+    if (new_num_inputs < i)
+        aiger_reencode(model);
+}
+
 aiger* aigrandom_generate(aigrandom_config* cfg)
 {
     unsigned num_inputs, num_latches, num_ands, num_outputs;
@@ -194,9 +241,136 @@ aiger* aigrandom_generate(aigrandom_config* cfg)
     }
 
     aiger_reencode(model);
+    remove_unused_inputs(model);
     pool_release(&defined);
 
     return model;
+}
+
+/*------------------------------------------------------------------------*/
+/* DOT file writer                                                      */
+/*------------------------------------------------------------------------*/
+
+int
+aigrandom_write_dot(aiger* model, FILE* file)
+{
+    unsigned i;
+    aiger_and* and;
+    char oname[64];
+
+    fprintf(file, "digraph AIG {\n");
+    fprintf(file, "  rankdir = BT;\n");
+    fprintf(file, "  node [shape = box];\n\n");
+
+    for (i = 0; i < model->num_inputs; i++) {
+        unsigned var = aiger_lit2var(model->inputs[i].lit);
+        const char* name = model->inputs[i].name;
+        if (name)
+            fprintf(file, "  \"%u\" [label = \"%s\", "
+                    "style = filled, fillcolor = palegreen];\n",
+                    var, name);
+        else
+            fprintf(file, "  \"%u\" [style = filled, fillcolor = palegreen];\n",
+                    var);
+    }
+
+    for (i = 0; i < model->num_latches; i++) {
+        unsigned var = aiger_lit2var(model->latches[i].lit);
+        const char* name = model->latches[i].name;
+        if (name)
+            fprintf(file, "  \"%u\" [label = \"%s\", color = magenta];\n",
+                    var, name);
+        else
+            fprintf(file, "  \"%u\" [color = magenta];\n", var);
+    }
+
+    for (i = 0; i < model->num_outputs; i++) {
+        const char* name = model->outputs[i].name;
+
+        if (name)
+            snprintf(oname, sizeof oname, "%s", name);
+        else
+            snprintf(oname, sizeof oname, "out_%u", i);
+
+        fprintf(file, "  \"%s\" [shape = doubleoctagon, "
+                "style = filled, fillcolor = lightpink];\n", oname);
+    }
+
+    fprintf(file, "\n");
+
+    if (model->num_inputs)
+    {
+        fprintf(file, "  { rank = source;");
+        for (i = 0; i < model->num_inputs; i++)
+            fprintf(file, " \"%u\";",
+                    aiger_lit2var(model->inputs[i].lit));
+        fprintf(file, " }\n");
+    }
+
+    if (model->num_outputs)
+    {
+        fprintf(file, "  { rank = sink;");
+        for (i = 0; i < model->num_outputs; i++) {
+            const char* name = model->outputs[i].name;
+
+            if (name)
+                snprintf(oname, sizeof oname, "%s", name);
+            else
+                snprintf(oname, sizeof oname, "out_%u", i);
+
+            fprintf(file, " \"%s\";", oname);
+        }
+        fprintf(file, " }\n");
+    }
+
+    fprintf(file, "\n");
+
+    for (i = 0; i < model->num_ands; i++) {
+        and = model->ands + i;
+        unsigned lhs = aiger_lit2var(and->lhs);
+        unsigned s0 = aiger_lit2var(and->rhs0);
+        unsigned s1 = aiger_lit2var(and->rhs1);
+        int neg0 = aiger_sign(and->rhs0);
+        int neg1 = aiger_sign(and->rhs1);
+
+        fprintf(file, "  \"%u\" -> \"%u\"%s;\n",
+                s0, lhs, neg0 ? " [style = dashed]" : "");
+        fprintf(file, "  \"%u\" -> \"%u\"%s;\n",
+                s1, lhs, neg1 ? " [style = dashed]" : "");
+    }
+
+    for (i = 0; i < model->num_latches; i++) {
+        unsigned var = aiger_lit2var(model->latches[i].lit);
+        unsigned next_var = aiger_lit2var(model->latches[i].next);
+        int neg = aiger_sign(model->latches[i].next);
+
+        fprintf(file, "  \"%u\" -> \"%u\"%s;\n",
+                next_var, var,
+                neg ? " [style = dashed]" : "");
+    }
+
+    for (i = 0; i < model->num_outputs; i++) {
+        unsigned lit = model->outputs[i].lit;
+        unsigned var = aiger_lit2var(lit);
+        int neg = aiger_sign(lit);
+        const char* name = model->outputs[i].name;
+
+        if (name)
+            snprintf(oname, sizeof oname, "%s", name);
+        else
+            snprintf(oname, sizeof oname, "out_%u", i);
+
+        if (var == 0) {
+            fprintf(file, "  \"FALSE\" -> \"%s\" [style = bold];\n", oname);
+        } else {
+            fprintf(file, "  \"%u\" -> \"%s\"%s;\n",
+                    var, oname,
+                    neg ? " [style = dashed]" : "");
+        }
+    }
+
+    fprintf(file, "}\n");
+    return 0;
 }
 
 /*------------------------------------------------------------------------*/
@@ -227,7 +401,7 @@ static void msg(const char* fmt, ...)
 }
 
 #define USAGE                                                             \
-    "usage: aigrandom [-h][-v][-a][-c][-s][-n <count>][<output>]\n"       \
+    "usage: aigrandom [-h][-v][-a][-c][-s][-d][-n <count>][<output>]\n"  \
     "\n"                                                                  \
     "Generate random AIGs in AIGER format.\n"                             \
     "\n"                                                                  \
@@ -236,6 +410,7 @@ static void msg(const char* fmt, ...)
     "  -a           ASCII output (.aag format)\n"                         \
     "  -c           combinational only (no latches)\n"                    \
     "  -s           add symbols to inputs, latches and outputs\n"         \
+    "  -d           also write a DOT graph visualization file\n"            \
     "  -n <count>   generate <count> AIGs (default 1)\n"                  \
     "  <output>     output file path (use '%%d' for count placeholder)\n" \
     "\n"                                                                  \
@@ -267,7 +442,7 @@ int main(int argc, char** argv)
 {
     aigrandom_config cfg;
     const char* output_pattern = 0;
-    int verbose = 0, ascii = 0, count = 1;
+    int verbose = 0, ascii = 0, dot = 0, count = 1;
     int i;
     unsigned base_seed = 0;
 
@@ -295,6 +470,8 @@ int main(int argc, char** argv)
             cfg.sequential = 0;
         else if (!strcmp(arg, "-s"))
             cfg.add_symbols = 1;
+        else if (!strcmp(arg, "-d"))
+            dot = 1;
         else if (!strcmp(arg, "-n")) {
             if (++i == argc)
                 die("argument to '-n' missing");
@@ -399,6 +576,27 @@ int main(int argc, char** argv)
 
             if (verbose)
                 msg("wrote '%s'", output_file);
+
+            if (dot) {
+                char dot_file[1024];
+                const char* ext = strrchr(output_file, '.');
+                if (ext && (!strcmp(ext, ".aig") || !strcmp(ext, ".aag"))) {
+                    snprintf(dot_file, sizeof dot_file, "%.*s.dot",
+                             (int)(ext - output_file), output_file);
+                } else {
+                    snprintf(dot_file, sizeof dot_file, "%s.dot",
+                             output_file);
+                }
+                {
+                    FILE* df = fopen(dot_file, "w");
+                    if (!df)
+                        die("failed to open '%s' for writing", dot_file);
+                    aigrandom_write_dot(model, df);
+                    fclose(df);
+                }
+                if (verbose)
+                    msg("wrote '%s'", dot_file);
+            }
         } else {
             mode = (ascii || isatty(1)) ? aiger_ascii_mode : aiger_binary_mode;
             ok = aiger_write_to_file(model, mode, stdout);

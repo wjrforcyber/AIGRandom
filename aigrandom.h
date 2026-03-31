@@ -45,5 +45,6 @@ struct aigrandom_config {
 };
 
 aiger* aigrandom_generate(aigrandom_config*);
+int aigrandom_write_dot(aiger*, FILE*);
 
 #endif

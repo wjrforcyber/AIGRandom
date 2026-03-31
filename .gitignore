@@ -1,0 +1,7 @@
+*.o
+*.a
+aigrandom
+log/
+*.aig
+*.dot
+.DS_Store
