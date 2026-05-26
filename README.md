@@ -136,11 +136,11 @@ diff a.aig b.aig   # files are identical
 ### Generate AIG with DOT visualization
 
 ```sh
-./aigrandom -c\                   
-  --min-inputs 3 --max-inputs 5 \
-  --min-ands 0 --max-ands 10 \               
-  --min-outputs 1 --max-outputs 2 \
-  --seed 42 -d tiny_0.aig
+./aigrandom -c \
+--min-inputs 3 --max-inputs 5 \
+--min-ands 0 --max-ands 10 \
+--min-outputs 1 --max-outputs 2 \
+--seed 42 -d tiny_0.aig
 dot -Tpng tiny_0.dot -o tiny_0.png
 ```
 
