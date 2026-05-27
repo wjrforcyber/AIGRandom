@@ -96,6 +96,17 @@ static void pool_release(LitPool* p)
     pool_init(p);
 }
 
+static unsigned pool_random_avoid_var(const LitPool* p, unsigned avoid_var)
+{
+    unsigned lit, tries = 0;
+    do {
+        lit = pool_random(p);
+        if (aiger_lit2var(lit) != avoid_var)
+            return lit;
+    } while (++tries < p->count + 1);
+    return lit;
+}
+
 /*------------------------------------------------------------------------*/
 
 static void remove_unused_inputs(aiger* model)
@@ -149,7 +160,7 @@ aiger* aigrandom_generate(aigrandom_config* cfg)
 {
     unsigned num_inputs, num_latches, num_ands, num_outputs;
     unsigned i, lit, lhs, rhs0, rhs1, next_lit;
-    unsigned var_idx;
+    unsigned var_idx, prev_and_lhs, anchor_out;
     aiger* model;
     LitPool defined;
     char buf[120];
@@ -186,21 +197,30 @@ aiger* aigrandom_generate(aigrandom_config* cfg)
 
     var_idx = num_inputs + num_latches;
 
+    prev_and_lhs = 0;
     for (i = 0; i < num_ands; i++) {
         lhs = 2 * (++var_idx);
 
-        assert(defined.count > 0);
-        rhs0 = pool_random(&defined);
-        if (rng_flip())
-            rhs0 ^= 1;
-
-        assert(defined.count > 0);
-        rhs1 = pool_random(&defined);
-        if (rng_flip())
-            rhs1 ^= 1;
+        if (i > 0) {
+            rhs0 = prev_and_lhs;
+            if (rng_flip())
+                rhs0 ^= 1;
+            rhs1 = pool_random_avoid_var(&defined, aiger_lit2var(rhs0));
+            if (rng_flip())
+                rhs1 ^= 1;
+        } else {
+            assert(defined.count > 0);
+            rhs0 = pool_random(&defined);
+            if (rng_flip())
+                rhs0 ^= 1;
+            rhs1 = pool_random_avoid_var(&defined, aiger_lit2var(rhs0));
+            if (rng_flip())
+                rhs1 ^= 1;
+        }
 
         aiger_add_and(model, lhs, rhs0, rhs1);
         pool_push(&defined, lhs);
+        prev_and_lhs = lhs;
     }
 
     for (i = 0; i < num_latches; i++) {
@@ -218,9 +238,16 @@ aiger* aigrandom_generate(aigrandom_config* cfg)
             aiger_add_latch(model, lit, next_lit, 0);
     }
 
+    anchor_out =
+        (num_ands > 0 && num_outputs > 0) ? rng_pick(0, num_outputs - 1) : 0;
+
     for (i = 0; i < num_outputs; i++) {
-        assert(defined.count > 0);
-        lit = pool_random(&defined);
+        if (num_ands > 0 && i == anchor_out) {
+            lit = prev_and_lhs;
+        } else {
+            assert(defined.count > 0);
+            lit = pool_random(&defined);
+        }
         if (rng_flip())
             lit ^= 1;
 
