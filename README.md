@@ -45,6 +45,11 @@ Generate random AIGs and write them in AIGER format.
 Each component count is picked randomly within its min/max range per
 invocation. Use these flags to control the complexity distribution.
 
+**Constraint:** `--min-ands` must be at least `--max-inputs` to ensure every
+input is referenced by an AND gate. If the randomly drawn `num_ands` is less
+than `num_inputs`, the tool exits with an error. Set `--min-ands` to at least
+your `--max-inputs` value to guarantee success across all seeds.
+
 | Option | Default | Meaning |
 |--------|---------|---------|
 | `--min-inputs <n>` | 1 | Minimum number of primary inputs |
@@ -83,9 +88,10 @@ Edges:
 - **Dashed arrow** — inverted connection (negated literal, the sign bit is set)
 
 Nodes are labeled with their symbolic names when `-s` is used (e.g. `input_0`,
-`output_3`), otherwise with variable indices (e.g. `1`, `15`). Inputs are
-guaranteed to be referenced by at least one AND gate, latch, or output —
-unused inputs are automatically removed before the DOT file is written.
+`output_3`), otherwise with variable indices (e.g. `1`, `15`). AND gates at the
+same logical level are placed on the same horizontal row using `rank = same`
+groups, where `level(gate) = max(level(rhs0), level(rhs1)) + 1` and inputs/latches
+are at level 0. This produces a layered layout instead of a tall, narrow graph.
 
 ## Examples
 
@@ -120,7 +126,7 @@ This produces `batch_0.aig` through `batch_99.aig`.
 ```sh
 ./aigrandom -c \
   --min-inputs 1 --max-inputs 3 \
-  --min-ands 0 --max-ands 5 \
+  --min-ands 3 --max-ands 5 \
   --min-outputs 1 --max-outputs 2 \
   -n 10 --seed 1 tiny_%d.aig
 ```
@@ -137,16 +143,16 @@ diff a.aig b.aig   # files are identical
 
 ```sh
 ./aigrandom -c \
---min-inputs 3 --max-inputs 5 \
---min-ands 0 --max-ands 10 \
---min-outputs 1 --max-outputs 2 \
---seed 42 -d tiny_0.aig
+  --min-inputs 3 --max-inputs 5 \
+  --min-ands 5 --max-ands 10 \
+  --min-outputs 1 --max-outputs 2 \
+  --seed 42 -d tiny_0.aig
 dot -Tpng tiny_0.dot -o tiny_0.png
 ```
 
 The random generated combinational logic shows as 
 <p align="center">
-    <img src="./resources/images/tiny_0.png" width="180"/>
+    <img src="./resources/images/tiny_0.png" width="250"/>
 </p>
 
 ## Output format
@@ -160,6 +166,9 @@ guaranteeing syntactic and semantic correctness:
 - All referenced literals are defined (inputs, latches, or AND gates)
 - The AND graph is acyclic
 - The header M I L O A counts are consistent
+- No two operands of any AND gate reference the same variable
+- Every input is referenced by at least one AND gate (no dangling inputs)
+- Every AND gate is transitively reachable from at least one output (no dangling gates)
 
 ## Code format
 Since file `aiger.c`, `aiger.h` is inherited from [AIGER library](https://github.com/arminbiere/aiger), the code style remains no change. For other source files, they should be formatted using `clang-format`. We are generally using Google style.

@@ -109,58 +109,12 @@ static unsigned pool_random_avoid_var(const LitPool* p, unsigned avoid_var)
 
 /*------------------------------------------------------------------------*/
 
-static void remove_unused_inputs(aiger* model)
-{
-    unsigned char* used;
-    unsigned i, new_num_inputs;
-
-    used = calloc(model->maxvar + 1, 1);
-    if (!used)
-        return;
-
-    for (i = 0; i < model->num_ands; i++) {
-        used[aiger_lit2var(model->ands[i].rhs0)] = 1;
-        used[aiger_lit2var(model->ands[i].rhs1)] = 1;
-    }
-    for (i = 0; i < model->num_latches; i++) {
-        used[aiger_lit2var(model->latches[i].next)] = 1;
-    }
-    for (i = 0; i < model->num_outputs; i++) {
-        used[aiger_lit2var(model->outputs[i].lit)] = 1;
-    }
-    for (i = 0; i < model->num_bad; i++) {
-        used[aiger_lit2var(model->bad[i].lit)] = 1;
-    }
-    for (i = 0; i < model->num_constraints; i++) {
-        used[aiger_lit2var(model->constraints[i].lit)] = 1;
-    }
-    for (i = 0; i < model->num_justice; i++) {
-        unsigned k;
-        for (k = 0; k < model->justice[i].size; k++)
-            used[aiger_lit2var(model->justice[i].lits[k])] = 1;
-    }
-    for (i = 0; i < model->num_fairness; i++) {
-        used[aiger_lit2var(model->fairness[i].lit)] = 1;
-    }
-
-    new_num_inputs = 0;
-    for (i = 0; i < model->num_inputs; i++) {
-        if (used[aiger_lit2var(model->inputs[i].lit)])
-            model->inputs[new_num_inputs++] = model->inputs[i];
-    }
-    model->num_inputs = new_num_inputs;
-
-    free(used);
-
-    if (new_num_inputs < i)
-        aiger_reencode(model);
-}
-
 aiger* aigrandom_generate(aigrandom_config* cfg)
 {
     unsigned num_inputs, num_latches, num_ands, num_outputs;
     unsigned i, lit, lhs, rhs0, rhs1, next_lit;
     unsigned var_idx, prev_and_lhs, anchor_out;
+    unsigned* input_perm;
     aiger* model;
     LitPool defined;
     char buf[120];
@@ -176,6 +130,14 @@ aiger* aigrandom_generate(aigrandom_config* cfg)
 
     num_ands = rng_pick(cfg->min_ands, cfg->max_ands);
     num_outputs = rng_pick(cfg->min_outputs, cfg->max_outputs);
+
+    if (num_inputs > 0 && num_ands < num_inputs) {
+        fprintf(stderr,
+                "*** [aigrandom] need at least %u AND gates to reference "
+                "all %u inputs (got %u), increase --min-ands\n",
+                num_inputs, num_inputs, num_ands);
+        exit(1);
+    }
 
     model = aiger_init();
     pool_init(&defined);
@@ -195,6 +157,16 @@ aiger* aigrandom_generate(aigrandom_config* cfg)
         pool_push(&defined, lit);
     }
 
+    input_perm = malloc(num_inputs * sizeof(unsigned));
+    for (i = 0; i < num_inputs; i++)
+        input_perm[i] = i;
+    for (i = num_inputs; i > 1; i--) {
+        unsigned j = rng_pick(0, i - 1);
+        unsigned tmp = input_perm[i - 1];
+        input_perm[i - 1] = input_perm[j];
+        input_perm[j] = tmp;
+    }
+
     var_idx = num_inputs + num_latches;
 
     prev_and_lhs = 0;
@@ -205,14 +177,18 @@ aiger* aigrandom_generate(aigrandom_config* cfg)
             rhs0 = prev_and_lhs;
             if (rng_flip())
                 rhs0 ^= 1;
-            rhs1 = pool_random_avoid_var(&defined, aiger_lit2var(rhs0));
+        } else {
+            unsigned forced_var = input_perm[0] + 1;
+            rhs0 = pool_random_avoid_var(&defined, forced_var);
+            if (rng_flip())
+                rhs0 ^= 1;
+        }
+
+        if (i < num_inputs) {
+            rhs1 = 2 * (input_perm[i] + 1);
             if (rng_flip())
                 rhs1 ^= 1;
         } else {
-            assert(defined.count > 0);
-            rhs0 = pool_random(&defined);
-            if (rng_flip())
-                rhs0 ^= 1;
             rhs1 = pool_random_avoid_var(&defined, aiger_lit2var(rhs0));
             if (rng_flip())
                 rhs1 ^= 1;
@@ -222,6 +198,8 @@ aiger* aigrandom_generate(aigrandom_config* cfg)
         pool_push(&defined, lhs);
         prev_and_lhs = lhs;
     }
+
+    free(input_perm);
 
     for (i = 0; i < num_latches; i++) {
         lit = 2 * (num_inputs + i + 1);
@@ -268,7 +246,6 @@ aiger* aigrandom_generate(aigrandom_config* cfg)
     }
 
     aiger_reencode(model);
-    remove_unused_inputs(model);
     pool_release(&defined);
 
     return model;
@@ -280,9 +257,29 @@ aiger* aigrandom_generate(aigrandom_config* cfg)
 
 int aigrandom_write_dot(aiger* model, FILE* file)
 {
-    unsigned i;
+    unsigned i, max_level;
+    unsigned* level;
     aiger_and*and;
     char oname[64];
+
+    level = calloc(model->maxvar + 1, sizeof *level);
+    if (!level)
+        return -1;
+
+    for (i = 0; i < model->num_ands; i++) {
+        unsigned lhs = aiger_lit2var(model->ands[i].lhs);
+        unsigned v0 = aiger_lit2var(model->ands[i].rhs0);
+        unsigned v1 = aiger_lit2var(model->ands[i].rhs1);
+        unsigned l0 = level[v0], l1 = level[v1];
+        level[lhs] = (l0 > l1 ? l0 : l1) + 1;
+    }
+
+    max_level = 0;
+    for (i = 0; i < model->num_ands; i++) {
+        unsigned l = level[aiger_lit2var(model->ands[i].lhs)];
+        if (l > max_level)
+            max_level = l;
+    }
 
     fprintf(file, "digraph AIG {\n");
     fprintf(file, "  rankdir = BT;\n");
@@ -332,6 +329,23 @@ int aigrandom_write_dot(aiger* model, FILE* file)
         for (i = 0; i < model->num_inputs; i++)
             fprintf(file, " \"%u\";", aiger_lit2var(model->inputs[i].lit));
         fprintf(file, " }\n");
+    }
+
+    for (i = 1; i <= max_level; i++) {
+        unsigned first = 1;
+        unsigned j;
+        for (j = 0; j < model->num_ands; j++) {
+            unsigned lhs = aiger_lit2var(model->ands[j].lhs);
+            if (level[lhs] == i) {
+                if (first) {
+                    fprintf(file, "  { rank = same;");
+                    first = 0;
+                }
+                fprintf(file, " \"%u\";", lhs);
+            }
+        }
+        if (!first)
+            fprintf(file, " }\n");
     }
 
     if (model->num_outputs) {
@@ -394,6 +408,7 @@ int aigrandom_write_dot(aiger* model, FILE* file)
     }
 
     fprintf(file, "}\n");
+    free(level);
     return 0;
 }
 
