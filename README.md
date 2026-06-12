@@ -39,6 +39,7 @@ Generate random AIGs and write them in AIGER format.
 | `-s` | Attach symbolic names to inputs, latches, and outputs |
 | `-d` | Also write a DOT graph visualization file (`.dot`) alongside the AIG output |
 | `-n <count>` | Generate `<count>` AIG files (default 1) |
+| `--view [N]` | Open generated file `N` in [VAiger](#interactive-viewing-with-vaiger) (default: 1) |
 
 ### Size bounds
 
@@ -93,6 +94,44 @@ same logical level are placed on the same horizontal row using `rank = same`
 groups, where `level(gate) = max(level(rhs0), level(rhs1)) + 1` and inputs/latches
 are at level 0. This produces a layered layout instead of a tall, narrow graph.
 
+## Interactive Viewing with VAiger
+
+The `--view` flag opens a generated AIG file in [VAiger](https://github.com/wjrforcyber/vaiger), an interactive Streamlit-based viewer with zoom, pan, theme switching, statistics plots, and critical path highlighting.
+
+```sh
+# Generate and view a single file
+./aigrandom -c --seed 42 --view showcase.aig
+
+# Generate a batch and view the 3rd file
+./aigrandom -c -n 10 --seed 0 --view 3 batch_%d.aig
+```
+
+**How it works:** after generating all AIG files, aigrandom launches `streamlit run vaiger/app.py` in the background with the selected file pre-loaded. The aigrandom process exits immediately; VAiger runs in its own process.
+
+### Setup (optional — only needed for `--view`)
+
+The `--view` flag requires additional dependencies that are **not** needed for normal aigrandom usage (build, generate, `-d` DOT output all work without these):
+
+```sh
+# 1. Initialize the vaiger git submodule (if not already done)
+git submodule update --init --recursive
+
+# 2. Create a virtual environment and install Python dependencies
+python -m venv .env
+source .env/bin/activate
+pip install streamlit networkx pydot matplotlib seaborn pandas
+
+# 3. Install Graphviz (macOS)
+brew install graphviz
+#    or (Ubuntu)
+sudo apt install graphviz
+
+# 4. Build the aiger C tools inside the vaiger submodule
+cd vaiger/aiger && ./configure.sh && make && cd ../../
+```
+
+If `--view` is used without these dependencies, aigrandom prints an error message listing what to install.
+
 ## Examples
 
 ### Minimal combinational circuit to stdout
@@ -130,6 +169,18 @@ This produces `batch_0.aig` through `batch_99.aig`.
   --min-outputs 1 --max-outputs 2 \
   -n 10 --seed 1 tiny_%d.aig
 ```
+
+### Generate and interactively view
+
+```sh
+./aigrandom -c \
+  --min-inputs 4 --max-inputs 6 \
+  --min-ands 8 --max-ands 10 \
+  --min-outputs 1 --max-outputs 2 \
+  --seed 42 --view showcase.aig
+```
+
+Opens VAiger in your browser with the generated circuit loaded.
 
 ### Reproducibility check (same seed = same file)
 

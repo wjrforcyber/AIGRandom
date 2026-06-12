@@ -462,7 +462,10 @@ static void msg(const char* fmt, ...)
     "  --max-ands <n>     maximum AND gates (default 100)\n"              \
     "  --min-outputs <n>  minimum outputs (default 1)\n"                  \
     "  --max-outputs <n>  maximum outputs (default 10)\n"                 \
-    "  --seed <n>         random seed (default: time-based)\n"
+    "  --seed <n>         random seed (default: time-based)\n"            \
+    "\n"                                                                  \
+    "  Visualization:\n"                                                  \
+    "  --view [N]        open generated file N in VAiger (default: 1)\n"
 
 static int isposnum(const char* str)
 {
@@ -482,6 +485,7 @@ int main(int argc, char** argv)
     aigrandom_config cfg;
     const char* output_pattern = 0;
     int verbose = 0, ascii = 0, dot = 0, count = 1;
+    int view_index = 0;
     int i;
     unsigned base_seed = 0;
 
@@ -553,6 +557,10 @@ int main(int argc, char** argv)
             if (++i == argc)
                 die("argument to '--seed' missing");
             base_seed = atoi(argv[i]);
+        } else if (!strcmp(arg, "--view")) {
+            view_index = -1;
+            if (i + 1 < argc && isposnum(argv[i + 1]))
+                view_index = atoi(argv[++i]);
         } else if (arg[0] == '-' && arg[1] == '-')
             die("invalid option '%s'", arg);
         else if (arg[0] == '-')
@@ -643,6 +651,38 @@ int main(int argc, char** argv)
         }
 
         aiger_reset(model);
+    }
+
+    if (view_index) {
+        int actual_view = (view_index == -1) ? 1 : view_index;
+        char view_file[1024];
+        char cmd[2048];
+
+        if (!output_pattern)
+            die("--view requires an output file (not stdout)");
+
+        if (actual_view < 1 || actual_view > count)
+            die("--view index %d out of range [1, %d]", actual_view, count);
+
+        if (count > 1 && strstr(output_pattern, "%d"))
+            snprintf(view_file, sizeof view_file, output_pattern,
+                     actual_view - 1);
+        else if (count > 1)
+            snprintf(view_file, sizeof view_file, "%s.%d", output_pattern,
+                     actual_view - 1);
+        else
+            snprintf(view_file, sizeof view_file, "%s", output_pattern);
+
+        snprintf(cmd, sizeof cmd,
+                 "AIG_FILE='%s' streamlit run vaiger/app.py "
+                 ">/dev/null 2>&1 &",
+                 view_file);
+        if (verbose)
+            msg("launching VAiger for '%s'", view_file);
+        if (system(cmd) != 0)
+            die("failed to launch VAiger — is streamlit installed?\n"
+                "  pip install streamlit networkx pydot matplotlib seaborn "
+                "pandas");
     }
 
     return 0;

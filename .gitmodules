@@ -1,0 +1,3 @@
+[submodule "vaiger"]
+	path = vaiger
+	url = https://github.com/wjrforcyber/vaiger.git
