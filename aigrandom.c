@@ -53,9 +53,9 @@ static unsigned rng_pick(unsigned from, unsigned to)
     return from + (rng_next() % range);
 }
 
-static int rng_flip(void)
+static int rng_chance(double prob)
 {
-    return rng_next() & 1;
+    return (rng_next() / 4294967296.0) < prob;
 }
 
 /*------------------------------------------------------------------------*/
@@ -175,22 +175,22 @@ aiger* aigrandom_generate(aigrandom_config* cfg)
 
         if (i > 0) {
             rhs0 = prev_and_lhs;
-            if (rng_flip())
+            if (rng_chance(cfg->invert_prob))
                 rhs0 ^= 1;
         } else {
             unsigned forced_var = input_perm[0] + 1;
             rhs0 = pool_random_avoid_var(&defined, forced_var);
-            if (rng_flip())
+            if (rng_chance(cfg->invert_prob))
                 rhs0 ^= 1;
         }
 
         if (i < num_inputs) {
             rhs1 = 2 * (input_perm[i] + 1);
-            if (rng_flip())
+            if (rng_chance(cfg->invert_prob))
                 rhs1 ^= 1;
         } else {
             rhs1 = pool_random_avoid_var(&defined, aiger_lit2var(rhs0));
-            if (rng_flip())
+            if (rng_chance(cfg->invert_prob))
                 rhs1 ^= 1;
         }
 
@@ -206,7 +206,7 @@ aiger* aigrandom_generate(aigrandom_config* cfg)
 
         assert(defined.count > 0);
         next_lit = pool_random(&defined);
-        if (rng_flip())
+        if (rng_chance(cfg->invert_prob))
             next_lit ^= 1;
 
         if (cfg->add_symbols) {
@@ -226,7 +226,7 @@ aiger* aigrandom_generate(aigrandom_config* cfg)
             assert(defined.count > 0);
             lit = pool_random(&defined);
         }
-        if (rng_flip())
+        if (rng_chance(cfg->invert_prob))
             lit ^= 1;
 
         if (cfg->add_symbols) {
@@ -439,35 +439,36 @@ static void msg(const char* fmt, ...)
     fflush(stderr);
 }
 
-#define USAGE                                                             \
-    "usage: aigrandom [-h][-v][-a][-c][-s][-d][-n <count>][<output>]\n"   \
-    "\n"                                                                  \
-    "Generate random AIGs in AIGER format.\n"                             \
-    "\n"                                                                  \
-    "  -h           print this command line option summary\n"             \
-    "  -v           verbose output on stderr\n"                           \
-    "  -a           ASCII output (.aag format)\n"                         \
-    "  -c           combinational only (no latches)\n"                    \
-    "  -s           add symbols to inputs, latches and outputs\n"         \
-    "  -d           also write a DOT graph visualization file\n"          \
-    "  -n <count>   generate <count> AIGs (default 1)\n"                  \
-    "  <output>     output file path (use '%%d' for count placeholder)\n" \
-    "\n"                                                                  \
-    "  Size bounds:\n"                                                    \
-    "  --min-inputs <n>   minimum inputs (default 1)\n"                   \
-    "  --max-inputs <n>   maximum inputs (default 20)\n"                  \
-    "  --min-latches <n>  minimum latches (default 0)\n"                  \
-    "  --max-latches <n>  maximum latches (default 10)\n"                 \
-    "  --min-ands <n>     minimum AND gates (default 0)\n"                \
-    "  --max-ands <n>     maximum AND gates (default 100)\n"              \
-    "  --min-outputs <n>  minimum outputs (default 1)\n"                  \
-    "  --max-outputs <n>  maximum outputs (default 10)\n"                 \
-    "  --seed <n>         random seed (default: time-based)\n"            \
-    "\n"                                                                  \
-    "  Post-processing:\n"                                                \
-    "  --strash [N]      run ABC strash on file N (default: all files)\n" \
-    "\n"                                                                  \
-    "  Visualization:\n"                                                  \
+#define USAGE                                                               \
+    "usage: aigrandom [-h][-v][-a][-c][-s][-d][-n <count>][<output>]\n"     \
+    "\n"                                                                    \
+    "Generate random AIGs in AIGER format.\n"                               \
+    "\n"                                                                    \
+    "  -h           print this command line option summary\n"               \
+    "  -v           verbose output on stderr\n"                             \
+    "  -a           ASCII output (.aag format)\n"                           \
+    "  -c           combinational only (no latches)\n"                      \
+    "  -s           add symbols to inputs, latches and outputs\n"           \
+    "  -d           also write a DOT graph visualization file\n"            \
+    "  -n <count>   generate <count> AIGs (default 1)\n"                    \
+    "  <output>     output file path (use '%%d' for count placeholder)\n"   \
+    "\n"                                                                    \
+    "  Size bounds:\n"                                                      \
+    "  --min-inputs <n>   minimum inputs (default 1)\n"                     \
+    "  --max-inputs <n>   maximum inputs (default 20)\n"                    \
+    "  --min-latches <n>  minimum latches (default 0)\n"                    \
+    "  --max-latches <n>  maximum latches (default 10)\n"                   \
+    "  --min-ands <n>     minimum AND gates (default 0)\n"                  \
+    "  --max-ands <n>     maximum AND gates (default 100)\n"                \
+    "  --min-outputs <n>  minimum outputs (default 1)\n"                    \
+    "  --max-outputs <n>  maximum outputs (default 10)\n"                   \
+    "  --seed <n>         random seed (default: time-based)\n"              \
+    "  --invert-prob <f>  edge inversion probability [0,1] (default 0.5)\n" \
+    "\n"                                                                    \
+    "  Post-processing:\n"                                                  \
+    "  --strash [N]      run ABC strash on file N (default: all files)\n"   \
+    "\n"                                                                    \
+    "  Visualization:\n"                                                    \
     "  --view [N]        open generated file N in VAiger (default: 1)\n"
 
 static int isposnum(const char* str)
@@ -502,6 +503,7 @@ int main(int argc, char** argv)
     cfg.max_ands = 100;
     cfg.min_outputs = 1;
     cfg.max_outputs = 10;
+    cfg.invert_prob = 0.5;
     cfg.sequential = 1;
 
     for (i = 1; i < argc; i++) {
@@ -561,6 +563,13 @@ int main(int argc, char** argv)
             if (++i == argc)
                 die("argument to '--seed' missing");
             base_seed = atoi(argv[i]);
+        } else if (!strcmp(arg, "--invert-prob")) {
+            if (++i == argc)
+                die("argument to '--invert-prob' missing");
+            cfg.invert_prob = atof(argv[i]);
+            if (cfg.invert_prob < 0.0 || cfg.invert_prob > 1.0)
+                die("--invert-prob must be in [0, 1] (got %.2f)",
+                    cfg.invert_prob);
         } else if (!strcmp(arg, "--view")) {
             view_index = -1;
             if (i + 1 < argc && isposnum(argv[i + 1]))

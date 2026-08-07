@@ -37,6 +37,7 @@ struct aigrandom_config {
     unsigned max_ands;
     unsigned min_outputs;
     unsigned max_outputs;
+    double invert_prob;
     unsigned num_layers;
     int output_ascii;
     int add_symbols;
