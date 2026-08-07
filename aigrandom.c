@@ -464,6 +464,9 @@ static void msg(const char* fmt, ...)
     "  --max-outputs <n>  maximum outputs (default 10)\n"                 \
     "  --seed <n>         random seed (default: time-based)\n"            \
     "\n"                                                                  \
+    "  Post-processing:\n"                                                \
+    "  --strash [N]      run ABC strash on file N (default: all files)\n" \
+    "\n"                                                                  \
     "  Visualization:\n"                                                  \
     "  --view [N]        open generated file N in VAiger (default: 1)\n"
 
@@ -486,6 +489,7 @@ int main(int argc, char** argv)
     const char* output_pattern = 0;
     int verbose = 0, ascii = 0, dot = 0, count = 1;
     int view_index = 0;
+    int strash_index = 0;
     int i;
     unsigned base_seed = 0;
 
@@ -561,6 +565,10 @@ int main(int argc, char** argv)
             view_index = -1;
             if (i + 1 < argc && isposnum(argv[i + 1]))
                 view_index = atoi(argv[++i]);
+        } else if (!strcmp(arg, "--strash")) {
+            strash_index = -1;
+            if (i + 1 < argc && isposnum(argv[i + 1]))
+                strash_index = atoi(argv[++i]);
         } else if (arg[0] == '-' && arg[1] == '-')
             die("invalid option '%s'", arg);
         else if (arg[0] == '-')
@@ -651,6 +659,83 @@ int main(int argc, char** argv)
         }
 
         aiger_reset(model);
+    }
+
+    if (strash_index) {
+        int start, end, j;
+        if (!output_pattern)
+            die("--strash requires an output file (not stdout)");
+
+        if (strash_index == -1) {
+            start = 0;
+            end = count;
+        } else {
+            if (strash_index < 1 || strash_index > count)
+                die("--strash index %d out of range [1, %d]", strash_index,
+                    count);
+            start = strash_index - 1;
+            end = start + 1;
+        }
+
+        for (j = start; j < end; j++) {
+            char in_file[1024], out_file[1024], cmd[2048];
+            char abc_in[1024];
+            int need_cleanup = 0;
+
+            if (count > 1 && strstr(output_pattern, "%d"))
+                snprintf(in_file, sizeof in_file, output_pattern, j);
+            else if (count > 1)
+                snprintf(in_file, sizeof in_file, "%s.%d", output_pattern, j);
+            else
+                snprintf(in_file, sizeof in_file, "%s", output_pattern);
+
+            {
+                const char* ext = strrchr(in_file, '.');
+                if (ext && (!strcmp(ext, ".aig") || !strcmp(ext, ".aag"))) {
+                    snprintf(out_file, sizeof out_file, "%.*s_st%s",
+                             (int) (ext - in_file), in_file, ext);
+                } else {
+                    snprintf(out_file, sizeof out_file, "%s_st.aig", in_file);
+                }
+            }
+
+            {
+                const char* ext = strrchr(in_file, '.');
+                if (ext && !strcmp(ext, ".aag")) {
+                    aiger* tmp = aiger_init();
+                    const char* err = aiger_open_and_read_from_file(
+                        tmp, in_file);
+                    if (err)
+                        die("cannot read '%s' for strash: %s", in_file, err);
+                    snprintf(abc_in, sizeof abc_in, "%s", in_file);
+                    char* dot = strrchr(abc_in, '.');
+                    if (dot)
+                        snprintf(dot, sizeof(abc_in) - (dot - abc_in),
+                                 ".bin.aig");
+                    aiger_open_and_write_to_file(tmp, abc_in);
+                    aiger_reset(tmp);
+                    need_cleanup = 1;
+                } else {
+                    snprintf(abc_in, sizeof abc_in, "%s", in_file);
+                }
+            }
+
+            if (verbose)
+                msg("strashing '%s' -> '%s'", in_file, out_file);
+
+            snprintf(cmd, sizeof cmd,
+                     "abc -c \"read_aiger %s; strash; "
+                     "write_aiger %s\" 2>&1",
+                     abc_in, out_file);
+            if (system(cmd) != 0) {
+                if (need_cleanup)
+                    remove(abc_in);
+                die("ABC strash failed — is 'abc' installed and on PATH?\n"
+                    "  Get ABC: https://github.com/berkeley-abc/abc");
+            }
+            if (need_cleanup)
+                remove(abc_in);
+        }
     }
 
     if (view_index) {

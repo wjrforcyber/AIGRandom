@@ -5,3 +5,4 @@ log/
 *.aig
 *.dot
 .DS_Store
+abc.history

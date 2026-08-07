@@ -40,6 +40,7 @@ Generate random AIGs and write them in AIGER format.
 | `-d` | Also write a DOT graph visualization file (`.dot`) alongside the AIG output |
 | `-n <count>` | Generate `<count>` AIG files (default 1) |
 | `--view [N]` | Open generated file `N` in [VAiger](#interactive-viewing-with-vaiger) (default: 1) |
+| `--strash [N]` | Run ABC structural hashing on file `N` (default: all files) |
 
 ### Size bounds
 
@@ -93,6 +94,24 @@ Nodes are labeled with their symbolic names when `-s` is used (e.g. `input_0`,
 same logical level are placed on the same horizontal row using `rank = same`
 groups, where `level(gate) = max(level(rhs0), level(rhs1)) + 1` and inputs/latches
 are at level 0. This produces a layered layout instead of a tall, narrow graph.
+
+## Structural Hashing with ABC
+
+The `--strash` flag runs [ABC](https://github.com/berkeley-abc/abc) structural hashing on the generated AIG files. This applies AIG rewriting to produce a structurally hashed (and potentially smaller) AIG:
+
+```sh
+# Generate and strash a single file (produces showcase_st.aig)
+./aigrandom -c --seed 42 --strash showcase.aig
+
+# Generate a batch and strash only the 3rd file
+./aigrandom -c -n 10 --seed 0 --strash 3 batch_%d.aig
+```
+
+**How it works:** after writing the AIG file(s), aigrandom runs:
+```
+abc -c "read_aiger <file>; strash; write_aiger <file>_st.aig"
+```
+The output file is named `<original>_st.aig` (or `<original>_st.aag`). Requires the `abc` binary on `PATH`. Get ABC from [https://github.com/berkeley-abc/abc](https://github.com/berkeley-abc/abc).
 
 ## Interactive Viewing with VAiger
 
