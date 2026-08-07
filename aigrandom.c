@@ -703,8 +703,8 @@ int main(int argc, char** argv)
                 const char* ext = strrchr(in_file, '.');
                 if (ext && !strcmp(ext, ".aag")) {
                     aiger* tmp = aiger_init();
-                    const char* err = aiger_open_and_read_from_file(
-                        tmp, in_file);
+                    const char* err =
+                        aiger_open_and_read_from_file(tmp, in_file);
                     if (err)
                         die("cannot read '%s' for strash: %s", in_file, err);
                     snprintf(abc_in, sizeof abc_in, "%s", in_file);
